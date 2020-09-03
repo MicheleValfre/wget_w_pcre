@@ -1,5 +1,5 @@
                                                           -*- text -*-
-GNU Wget
+GNU Wget with PCRE-based substitution
 ========
                   Current Web home: https://www.gnu.org/software/wget/
 
@@ -88,3 +88,29 @@ grants you additional permission to convey the resulting work.
 Corresponding Source for a non-source form of such a combination
 shall include the source code for the parts of OpenSSL used as well
 as that of the covered work.
+
+======================================================================
+PCRE-based substitution
+
+Using this version of wget should enable you to search/substitute parts of the urls you get with Perl Compatible Regular Expressions(PCRE).
+This can be done by appending the --url-replace='s/<find>/<replace>/<options>'
+Where s is mandatory(for now)
+      <find> is a PCRE,
+      <replace> is a string
+      <options> is a string defining options.
+
+Some examples:
+
+wget --recursive --url-replace='s/\?xyz//' <url>
+    find: '\?xyz'
+    replace: ''
+    options: None
+    wget will explore the <url> recursively and will not download any occurrence
+    of '?xyz' (please, note that '?' is escaped!).
+
+wget --recursive --url-replace='s/abc/def/g' <url>
+    find: 'abc'
+    replace: 'def'
+    options: 'g'
+    wget will explore <url> recursively and will change every occurrence(option 
+    'g') of 'abc' found in each url in 'def' before downloading it
