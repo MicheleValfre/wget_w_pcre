@@ -1,5 +1,5 @@
 /* struct options.
-   Copyright (C) 1996-2011, 2015, 2018-2020 Free Software Foundation,
+   Copyright (C) 1996-2011, 2015, 2018-2019 Free Software Foundation,
    Inc.
 
 This file is part of GNU Wget.
@@ -37,6 +37,8 @@ enum CHECK_CERT_MODES
 
 struct options
 {
+  char * * url_replace;         /*pcre or pcre2 regex for url-replace*/
+  int url_rep_size;             /*number of strings contained in url_replace*/
   int verbose;                  /* Are we verbose?  (First set to -1,
                                    hence not boolean.) */
   bool quiet;                   /* Are we quiet? */

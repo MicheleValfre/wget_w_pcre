@@ -1,5 +1,5 @@
 /* Support for Robot Exclusion Standard (RES).
-   Copyright (C) 2001, 2006-2011, 2015, 2018-2020 Free Software
+   Copyright (C) 2001, 2006-2011, 2015, 2018-2019 Free Software
    Foundation, Inc.
 
 This file is part of Wget.
@@ -391,7 +391,7 @@ res_parse_from_file (const char *filename)
   struct file_memory *fm = wget_read_file (filename);
   if (!fm)
     {
-      logprintf (LOG_NOTQUIET, _("Cannot open %s: %s\n"),
+      logprintf (LOG_NOTQUIET, _("Cannot open %s: %s"),
                  filename, strerror (errno));
       return NULL;
     }
@@ -419,7 +419,7 @@ free_specs (struct robot_specs *specs)
 #define DECODE_MAYBE(c, ptr) do {                               \
   if (c == '%' && c_isxdigit (ptr[1]) && c_isxdigit (ptr[2]))       \
     {                                                           \
-      unsigned char decoded = X2DIGITS_TO_NUM (ptr[1], ptr[2]);          \
+      char decoded = X2DIGITS_TO_NUM (ptr[1], ptr[2]);          \
       if (decoded != '/')                                       \
         {                                                       \
           c = decoded;                                          \
@@ -479,6 +479,15 @@ res_match_path (const struct robot_specs *specs, const char *path)
 
 static struct hash_table *registered_specs;
 
+/* Stolen from cookies.c. */
+#define SET_HOSTPORT(host, port, result) do {           \
+  int HP_len = strlen (host);                           \
+  result = alloca (HP_len + 1 + numdigit (port) + 1);   \
+  memcpy (result, host, HP_len);                        \
+  result[HP_len] = ':';                                 \
+  number_to_string (result + HP_len + 1, port);         \
+} while (0)
+
 /* Register RES specs that below to server on HOST:PORT.  They will
    later be retrievable using res_get_specs.  */
 
@@ -486,27 +495,21 @@ void
 res_register_specs (const char *host, int port, struct robot_specs *specs)
 {
   struct robot_specs *old;
-  char buf[256], *hp, *hp_old;
-
-  if (((unsigned) snprintf (buf, sizeof (buf), "%s:%d", host, port)) >= sizeof (buf))
-    hp = aprintf("%s:%d", host, port);
-  else
-    hp = buf;
+  char *hp, *hp_old;
+  SET_HOSTPORT (host, port, hp);
 
   if (!registered_specs)
     registered_specs = make_nocase_string_hash_table (0);
 
   if (hash_table_get_pair (registered_specs, hp, &hp_old, &old))
     {
-      if (hp != buf)
-        xfree (hp);
       if (old)
         free_specs (old);
       hash_table_put (registered_specs, hp_old, specs);
     }
   else
     {
-      hash_table_put (registered_specs, hp == buf ? xstrdup (hp) : hp, specs);
+      hash_table_put (registered_specs, xstrdup (hp), specs);
     }
 }
 
@@ -515,16 +518,10 @@ res_register_specs (const char *host, int port, struct robot_specs *specs)
 struct robot_specs *
 res_get_specs (const char *host, int port)
 {
-  char buf[256], *hp;
-
+  char *hp;
+  SET_HOSTPORT (host, port, hp);
   if (!registered_specs)
     return NULL;
-
-  if (((unsigned) snprintf (buf, sizeof (buf), "%s:%d", host, port)) >= sizeof (buf))
-    hp = aprintf("%s:%d", host, port);
-  else
-    hp = buf;
-
   return hash_table_get (registered_specs, hp);
 }
 
@@ -599,7 +596,6 @@ is_robots_txt_url (const char *url)
   return ret;
 }
 
-#if defined DEBUG_MALLOC || defined TESTING
 void
 res_cleanup (void)
 {
@@ -617,7 +613,6 @@ res_cleanup (void)
       registered_specs = NULL;
     }
 }
-#endif
 
 #ifdef TESTING
 

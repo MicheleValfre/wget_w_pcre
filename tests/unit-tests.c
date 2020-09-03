@@ -1,5 +1,5 @@
 /* Unit testing.
-   Copyright (C) 2005-2011, 2015, 2018-2020 Free Software Foundation,
+   Copyright (C) 2005-2011, 2015, 2018-2019 Free Software Foundation,
    Inc.
 
 This file is part of GNU Wget.
@@ -37,7 +37,7 @@ as that of the covered work.  */
 
 #include "unit-tests.h"
 
-extern const char *program_argstring;
+const char *program_argstring = "TEST";
 
 static int tests_run;
 
@@ -69,7 +69,7 @@ all_tests(void)
   return NULL;
 }
 
-extern const char *program_name; /* Needed by lib/error.c. */
+const char *program_name; /* Needed by lib/error.c. */
 
 int
 main (int argc _GL_UNUSED, const char *argv[])

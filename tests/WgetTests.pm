@@ -13,13 +13,7 @@ use IO::Handle;
 use POSIX qw(locale_h);
 use locale;
 
-if (defined $ENV{'WGET_PATH'}) {
-    our $WGETPATH = $ENV{'WGET_PATH'} . ' -d --no-config';
-} else {
-    our $WGETPATH = '../src/wget -d --no-config';
-}
-
-
+our $WGETPATH = '../src/wget -d --no-config';
 our $VALGRIND_SUPP_FILE = Cwd::getcwd();
 if (defined $ENV{'srcdir'}) {
     $VALGRIND_SUPP_FILE = $VALGRIND_SUPP_FILE
@@ -145,7 +139,7 @@ sub run
     {
         $cmdline =
           'valgrind --suppressions=' . $VALGRIND_SUPP_FILE
-          . ' --error-exitcode=301 --leak-check=yes --track-origins=yes --gen-suppressions=all '
+          . ' --error-exitcode=301 --leak-check=yes --track-origins=yes '
           . $cmdline;
     }
     elsif ($valgrind ne q{} && $valgrind ne "0")

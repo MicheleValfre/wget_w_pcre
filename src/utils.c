@@ -1,5 +1,5 @@
 /* Various utility functions.
-   Copyright (C) 1996-2011, 2015, 2018-2020 Free Software Foundation,
+   Copyright (C) 1996-2011, 2015, 2018-2019 Free Software Foundation,
    Inc.
 
 This file is part of GNU Wget.
@@ -112,6 +112,193 @@ as that of the covered work.  */
 
 #include "exits.h"
 #include "c-strcase.h"
+
+#define PCRE_NO_OPTION 0
+#define PCRE_OPTION_G 1
+#define MEM_INC 1
+/*Turns every upper case letter in lower case*/
+void low_case(char * * str_ptr){
+    char * str;
+    if(!str_ptr)
+        return;
+    str = *str_ptr;
+    for(int i = 0 ; i < strlen(str) ; i++){
+        if(str[i] >= 65 && str[i] <= 90){
+            str[i] += 32;
+        }
+    }
+}
+
+/*This function edits text according with pcre and stores the result in *output_buf
+  of *out_buf_size*/
+int pcre_matching_and_replacement(char * text, char * pcre,char ** output_buf, size_t * out_buf_size){
+    uint32_t pcre_opt;
+    char * target;
+    char * subst;
+    char * options;
+    int err_code;
+    char ** tmp;/*Used for pcre's parsing*/
+    int slash_pos[3];
+    int sp_idx;
+    int tmp_idx;/*index for tmp*/
+    PCRE2_SIZE err_offset;
+    const pcre2_code * code;
+    pcre2_match_data * match_data;
+    bool no_mem_error = true;
+    bool escape = false;
+    size_t buf_size_backup = 0;
+    int rc = 0;
+    
+    if(!text){
+        fprintf(stderr,"text must be not null\n");
+        return 0;
+    }
+    if(!pcre){
+        fprintf(stderr,"pcre must be not null\n");
+        return 0;
+    }
+    if(!output_buf || !*output_buf){
+        fprintf(stderr,"invalid output buffer\n");
+        return 0;
+    }
+    if(!out_buf_size){
+        fprintf(stderr,"invalid output buffer size ptr\n");
+        return 0;
+    }
+
+    /*Parsing*/
+    tmp = xmalloc(sizeof(char*) * 3);
+    if(!tmp){
+        fprintf(stderr,"Error occurred while trying to allocate memory");
+        exit(0);
+    }
+    tmp_idx = 0;
+    if(pcre[0] != 's' || pcre[1] != '/'){
+        fprintf(stderr,"Parsing error, wrong pcre format: %s\n",pcre);
+        return 0;
+    }
+    /*for(int i = 0 ; i < strlen(pcre); i++){
+        if(pcre[i] == '/'){
+            if(i >= 2){
+                if(pcre[i-1] != '\\' && pcre[i-2] != '\\'){
+                    tmp[tmp_idx] = strdup(pcre + i + 1);
+                    //pcre += i + 1;
+                    if(tmp_idx > 0){
+                        tmp[tmp_idx-1][i - (strlen(pcre)-(strlen(tmp[tmp_idx-1])))] = '\0'; 
+                    }
+                    tmp_idx++;
+                }
+            }
+        }
+    }*/
+
+    escape = false;
+    tmp_idx = 0;
+    sp_idx = 0;
+    for(int i = 2 ; i < strlen(pcre) ; i++){
+        switch((pcre)[i]){
+            case '\\':
+                escape = true;
+            break;
+            case '/':
+                if(escape)
+                    escape = false;
+                else{
+                    slash_pos[sp_idx] = i;
+                    sp_idx++;
+                }
+            break;
+            default:
+                escape = false;
+            break;
+        }
+    }
+    tmp[0] = strndup(pcre+2,slash_pos[0]-2);
+    if(slash_pos[1] - slash_pos[0] > 1)
+        tmp[1] = strndup(pcre + slash_pos[0], slash_pos[1] - slash_pos[0]);
+    else
+        tmp[1] = "";
+    tmp[2] = xstrdup(pcre+ slash_pos[1] + 1);
+
+
+    if(!tmp[0] || !tmp[1] || !tmp[2]){
+        fprintf(stderr,"Parsing error: wrong format: %s\n");
+        exit(0);
+    }
+    target = tmp[0];
+    for(int i = 0; i < strlen(target)-1; i++){
+        if(target[i] == '\\' && target[i+1] == '/'){
+            for(int j = i ; j < strlen(target-1) ; j++){
+                target[j] = target[j+1];
+            }
+            target[strlen(target)-1] = '\0';
+        }
+    }
+    
+    subst = tmp[1];
+    if(strlen(subst) > 0){
+        for(int i = 0; i < strlen(subst)-1; i++){
+            if(subst[i] == '\\' && subst[i+1] == '/'){
+                for(int j = i ; j < strlen(subst)-1 ; j++){
+                    subst[j] = subst[j+1];
+                }
+                subst[strlen(subst)-1] = '\0';
+            }
+        }
+    }
+    options = tmp[2];
+
+    /*getting options*/
+    pcre_opt = 0;
+    if(options){
+        for(int i = 0 ; i < strlen(options) ; i++){
+            switch(options[i]){
+                case 'g':
+                    pcre_opt = pcre_opt | PCRE2_SUBSTITUTE_GLOBAL;
+                break;
+                case 'i':
+                    low_case(&text); 
+                break;
+                case 'A':
+                    pcre_opt = pcre_opt | PCRE2_ANCHORED;
+            }
+        }
+    }
+
+    err_code = 0;
+    err_offset = 0;
+    code = pcre2_compile((PCRE2_SPTR)target,(PCRE2_SIZE)strlen(target),PCRE2_UCP,&err_code,&err_offset,NULL);
+    if(code == NULL){//Compilation failed
+        PCRE2_UCHAR buffer[256];
+        pcre2_get_error_message(err_code,buffer,sizeof(buffer));
+        fprintf(stderr,"PCRE2 compilation error at offset %d: %s\n",(int)err_offset, buffer);
+        return 0;
+    }
+    match_data = pcre2_match_data_create_from_pattern(code,NULL);
+    buf_size_backup = *out_buf_size;
+    rc = pcre2_substitute(code,(PCRE2_SPTR)text,(PCRE2_SIZE)(strlen(text)*sizeof(char)), 0, pcre_opt, match_data,NULL,(PCRE2_SPTR)subst,(PCRE2_SIZE)(strlen(subst)* sizeof(char)),(PCRE2_UCHAR *)(*output_buf),(PCRE2_SIZE*)out_buf_size);
+    if(rc < 0){
+      *out_buf_size = buf_size_backup;
+      if(rc == PCRE2_ERROR_NOMEMORY){
+        return 2;
+      }
+      else{
+        *out_buf_size = buf_size_backup;
+        PCRE2_UCHAR buffer[256];
+        pcre2_get_error_message(rc,buffer,sizeof(buffer));
+        fprintf(stderr,"PCRE2 substitution error: %s\n",buffer);
+        return 0;
+      }
+    }
+    pcre2_match_data_free(match_data);
+    pcre2_code_free((pcre2_code*)code);
+    return 1;
+    for(int i = 0 ; i < 3 ; i++){
+        if(tmp[i])
+            xfree(tmp[i]);
+    } 
+}
+
 
 _Noreturn static void
 memfatal (const char *context, long attempted_size)
@@ -659,7 +846,7 @@ unique_name_1 (const char *prefix)
 {
   int count = 1;
   int plen = strlen (prefix);
-  char *template = xmalloc (plen + 1 + 24);
+  char *template = (char *)alloca (plen + 1 + 24);
   char *template_tail = template + plen;
 
   memcpy (template, prefix, plen);
@@ -667,9 +854,9 @@ unique_name_1 (const char *prefix)
 
   do
     number_to_string (template_tail, count++);
-  while (file_exists_p (template, NULL) && count < 999999);
+  while (file_exists_p (template, NULL));
 
-  return template;
+  return xstrdup (template);
 }
 
 /* Return a unique file name, based on FILE.
@@ -686,27 +873,21 @@ unique_name_1 (const char *prefix)
    by this function exists until you open it with O_EXCL or
    equivalent.
 
-   unique_name() always returns a freshly allocated string.
-
-   unique_name_passthrough() may return FILE if the file doesn't exist
+   If ALLOW_PASSTHROUGH is 0, it always returns a freshly allocated
+   string.  Otherwise, it may return FILE if the file doesn't exist
    (and therefore doesn't need changing).  */
 
 char *
-unique_name_passthrough (const char *file)
+unique_name (const char *file, bool allow_passthrough)
 {
   /* If the FILE itself doesn't exist, return it without
-     modification. Otherwise, find a numeric suffix that results in unused
-     file name and return it.  */
-  return file_exists_p (file, NULL) ? unique_name_1 (file) : (char *) file;
-}
+     modification. */
+  if (!file_exists_p (file, NULL))
+    return allow_passthrough ? (char *)file : xstrdup (file);
 
-char *
-unique_name (const char *file)
-{
-  /* If the FILE itself doesn't exist, return it without
-     modification. Otherwise, find a numeric suffix that results in unused
-     file name and return it.  */
-  return file_exists_p (file, NULL) ? unique_name_1 (file) : xstrdup (file);
+  /* Otherwise, find a numeric suffix that results in unused file name
+     and return it.  */
+  return unique_name_1 (file);
 }
 
 #else /* def UNIQ_SEP */
@@ -715,17 +896,10 @@ unique_name (const char *file)
    possible.
 */
 char *
-unique_name_passthrough (const char *file, bool allow_passthrough)
+unique_name (const char *file, bool allow_passthrough)
 {
   /* Return the FILE itself, without modification, irregardful. */
-  return (char *) file);
-}
-char *
-
-unique_name (const char *file)
-{
-  /* Return the FILE itself, without modification, irregardful. */
-  return xstrdup (file);
+  return allow_passthrough ? (char *)file : xstrdup (file);
 }
 
 #endif /* def UNIQ_SEP [else] */
@@ -739,12 +913,12 @@ FILE *
 unique_create (const char *name, bool binary, char **opened_name)
 {
   /* unique file name, based on NAME */
-  char *uname = unique_name (name);
+  char *uname = unique_name (name, false);
   FILE *fp;
   while ((fp = fopen_excl (uname, binary)) == NULL && errno == EEXIST)
     {
       xfree (uname);
-      uname = unique_name (name);
+      uname = unique_name (name, false);
     }
   if (opened_name)
     {
@@ -899,7 +1073,7 @@ fopen_stat(const char *fname, const char *mode, file_stats_t *fstats)
        fdstats.st_ino != fstats->st_ino))
   {
     /* File changed since file_exists_p() : NOT SAFE */
-    logprintf (LOG_NOTQUIET, _("File %s changed since the last check. Security check failed.\n"), fname);
+    logprintf (LOG_NOTQUIET, _("File %s changed since the last check. Security check failed."), fname);
     fclose (fp);
     return NULL;
   }
@@ -950,7 +1124,7 @@ open_stat(const char *fname, int flags, mode_t mode, file_stats_t *fstats)
        fdstats.st_ino != fstats->st_ino))
   {
     /* File changed since file_exists_p() : NOT SAFE */
-    logprintf (LOG_NOTQUIET, _("Trying to open file %s but it changed since last check. Security check failed.\n"), fname);
+    logprintf (LOG_NOTQUIET, _("Trying to open file %s but it changed since last check. Security check failed."), fname);
     close (fd);
     return -1;
   }
@@ -969,19 +1143,11 @@ int
 make_directory (const char *directory)
 {
   int i, ret, quit = 0;
-  char buf[1024];
   char *dir;
-  size_t len = strlen (directory);
 
   /* Make a copy of dir, to be able to write to it.  Otherwise, the
      function is unsafe if called with a read-only char *argument.  */
-  if (len < sizeof(buf))
-    {
-      memcpy(buf, directory, len + 1);
-      dir = buf;
-	}
-  else
-    dir = xstrdup(directory);
+  STRDUP_ALLOCA (dir, directory);
 
   /* If the first character of dir is '/', skip it (and thus enable
      creation of absolute-pathname directories.  */
@@ -1004,10 +1170,6 @@ make_directory (const char *directory)
       else
         dir[i] = '/';
     }
-
-  if (dir != buf)
-	  xfree (dir);
-
   return ret;
 }
 
@@ -1042,10 +1204,23 @@ file_merge (const char *base, const char *file)
 int
 fnmatch_nocase (const char *pattern, const char *string, int flags)
 {
+#ifdef FNM_CASEFOLD
   /* The FNM_CASEFOLD flag started as a GNU extension, but it is now
-     also present on *BSD platforms, and possibly elsewhere.
-     Gnulib provides this flag in case it doesn't exist.  */
+     also present on *BSD platforms, and possibly elsewhere.  */
   return fnmatch (pattern, string, flags | FNM_CASEFOLD);
+#else
+  /* Turn PATTERN and STRING to lower case and call fnmatch on them. */
+  char *patcopy = (char *) alloca (strlen (pattern) + 1);
+  char *strcopy = (char *) alloca (strlen (string) + 1);
+  char *p;
+  for (p = patcopy; *pattern; pattern++, p++)
+    *p = c_tolower (*pattern);
+  *p = '\0';
+  for (p = strcopy; *string; string++, p++)
+    *p = c_tolower (*string);
+  *p = '\0';
+  return fnmatch (patcopy, strcopy, flags);
+#endif
 }
 
 static bool in_acclist (const char *const *, const char *, bool);

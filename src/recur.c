@@ -1,5 +1,5 @@
 /* Handling of recursive HTTP retrieving.
-   Copyright (C) 1996-2012, 2015, 2018-2020 Free Software Foundation,
+   Copyright (C) 1996-2012, 2015, 2018-2019 Free Software Foundation,
    Inc.
 
 This file is part of GNU Wget.
@@ -266,6 +266,9 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
 
   while (1)
     {
+      char * output_buf;/*used by pcre_matching_and_replacement*/
+      size_t buf_size;//allocated memory for output_buf
+      size_t old_buf_size;
       bool descend = false;
       char *url, *referer, *file = NULL;
       int depth;
@@ -285,6 +288,40 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                         &depth, &html_allowed, &css_allowed))
         break;
 
+      /*...check if --url-replace is specified and, if so, apply it...*/
+      if(opt.url_replace && strcmp(url,start_url_parsed->url) != 0){/*do not apply regex on start url*/
+        output_buf = xmalloc(sizeof(char) * 10);
+        if(!output_buf){
+          fprintf(stderr,"Some error occurred while trying to allocate memory.\n");
+          exit(0);
+        }
+        buf_size = 10;
+        for(int pcre_idx = 0; pcre_idx < opt.url_rep_size; pcre_idx++){
+          bool done = false;
+          old_buf_size = buf_size;
+          while(!done){
+            switch(pcre_matching_and_replacement(url,opt.url_replace[pcre_idx],&output_buf,&buf_size)){
+              case 0:
+                done = true;
+              break;
+              case 1:
+                done = true;
+                url = xstrdup(output_buf);
+              break;
+              case 2:
+                old_buf_size += 5;
+                buf_size = old_buf_size;
+                output_buf = xrealloc(output_buf,(buf_size + 5) * sizeof(char));
+                if(!output_buf){
+                  fprintf(stderr,"Error occurred while allocating memory.\n");
+                  exit(0);
+                }
+              break;
+            }
+          }
+        }
+        xfree(output_buf);
+      } 
       /* ...and download it.  Note that this download is in most cases
          unconditional, as download_child already makes sure a file
          doesn't get enqueued twice -- and yet this check is here, and

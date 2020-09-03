@@ -1,5 +1,5 @@
 /* Reading/parsing the initialization file.
-   Copyright (C) 1996-2012, 2014-2015, 2018-2020 Free Software
+   Copyright (C) 1996-2012, 2014-2015, 2018-2019 Free Software
    Foundation, Inc.
 
 This file is part of GNU Wget.
@@ -58,8 +58,6 @@ as that of the covered work.  */
 #include "host.h"
 #include "netrc.h"
 #include "progress.h"
-#include "connect.h"            /* for connect_cleanup */
-#include "ssl.h"                /* for ssl_cleanup */
 #include "recur.h"              /* for INFINITE_RECURSION */
 #include "convert.h"            /* for convert_cleanup */
 #include "res.h"                /* for res_cleanup */
@@ -120,6 +118,7 @@ CMD_DECLARE (cmd_spec_timeout);
 CMD_DECLARE (cmd_spec_useragent);
 CMD_DECLARE (cmd_spec_verbose);
 CMD_DECLARE (cmd_check_cert);
+CMD_DECLARE (cmd_str_array);/*Used by --url-replace*/
 
 /* List of recognized commands, each consisting of name, place and
    function.  When adding a new command, simply add it to the list,
@@ -332,6 +331,7 @@ static const struct {
   { "tries",            &opt.ntry,              cmd_number_inf },
   { "trustservernames", &opt.trustservernames,  cmd_boolean },
   { "unlink",           &opt.unlink_requested,  cmd_boolean },
+  { "urlreplace",       &opt.url_replace,       cmd_str_array},
   { "useaskpass" ,      &opt.use_askpass,       cmd_use_askpass },
   { "useproxy",         &opt.use_proxy,         cmd_boolean },
   { "user",             &opt.user,              cmd_string },
@@ -829,8 +829,6 @@ parse_line (const char *line, char **com, char **val, int *comind)
   const char *end = line + strlen (line);
   const char *cmdstart, *cmdend;
   const char *valstart, *valend;
-  char buf[1024];
-  size_t len;
 
   char *cmdcopy;
   int ind;
@@ -871,18 +869,9 @@ parse_line (const char *line, char **com, char **val, int *comind)
 
   /* The line now known to be syntactically correct.  Check whether
      the command is valid.  */
-  len = cmdend - cmdstart;
-  if (len < sizeof (buf))
-    cmdcopy = buf;
-  else
-    cmdcopy = xmalloc (len + 1);
-  memcpy (cmdcopy, cmdstart, len);
-  cmdcopy[len] = 0;
-
+  BOUNDED_TO_ALLOCA (cmdstart, cmdend, cmdcopy);
   dehyphen (cmdcopy);
   ind = command_by_name (cmdcopy);
-  if (cmdcopy != buf)
-    xfree (cmdcopy);
   if (ind == -1)
     return line_unknown_command;
 
@@ -957,15 +946,14 @@ setval_internal_tilde (int comind, const char *com, const char *val)
 
 void
 setoptval (const char *com, const char *val, const char *optname)
-{
+{ 
   /* Prepend "--" to OPTNAME. */
-  char dd_optname[2 + MAX_LONGOPTION + 1];
-
-  if ((unsigned) snprintf(dd_optname, sizeof (dd_optname), "--%s", optname) > sizeof (dd_optname))
-    exit (WGET_EXIT_PARSE_ERROR);
+  char *dd_optname = (char *) alloca (2 + strlen (optname) + 1);
+  dd_optname[0] = '-';
+  dd_optname[1] = '-';
+  strcpy (dd_optname + 2, optname);
 
   assert (val != NULL);
-
   if (!setval_internal (command_by_name (com), dd_optname, val))
     exit (WGET_EXIT_PARSE_ERROR);
 }
@@ -1056,6 +1044,33 @@ cmd_boolean (const char *com, const char *val, void *place)
   *(bool *) place = value;
   return true;
 }
+
+static bool
+cmd_str_array(const char * com, const char * val, void * place _GL_UNUSED)
+{
+  if(!opt.url_replace){
+    opt.url_rep_size = 1;
+    opt.url_replace = xmalloc(sizeof(char*));
+    if(!opt.url_replace){
+      fprintf(stderr,"Error occurred while trying to allocate memory.\n");
+      exit(0);
+    }
+  }
+  else{
+    opt.url_rep_size++;
+    opt.url_replace = xrealloc(opt.url_replace,sizeof(char*)*opt.url_rep_size);
+    if(!opt.url_replace){
+      fprintf(stderr,"Error occurred while trying to allocate memory.\n");
+      exit(0);
+    }
+  }
+  opt.url_replace[opt.url_rep_size - 1] = xstrdup(val);
+  if(!opt.url_replace[opt.url_rep_size - 1]){
+    fprintf(stderr,"Error occurred in xstrdup.\n");
+    exit(0);
+  }
+}
+
 
 /* Store the check_cert value from VAL to PLACE.  COM is ignored,
    except for error messages.  */
@@ -1422,13 +1437,6 @@ cmd_time (const char *com, const char *val, void *place)
 
   if (!simple_atof (val, end, &number))
     goto err;
-
-  if (number < 0)
-    {
-      fprintf (stderr, _("%s: %s: Negative time period %s\n"),
-               exec_name, com, quote (val));
-      return false;
-    }
 
   *(double *)place = number * mult;
   return true;
@@ -1950,10 +1958,6 @@ cleanup (void)
   host_cleanup ();
   log_cleanup ();
   netrc_cleanup ();
-#ifdef HAVE_SSL
-  ssl_cleanup ();
-#endif
-  connect_cleanup ();
 
   xfree (opt.choose_config);
   xfree (opt.lfilename);

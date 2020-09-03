@@ -1,5 +1,5 @@
 /* Support for cookies.
-   Copyright (C) 2001-2011, 2015, 2018-2020 Free Software Foundation,
+   Copyright (C) 2001-2011, 2015, 2018-2019 Free Software Foundation,
    Inc.
 
 This file is part of GNU Wget.
@@ -395,15 +395,12 @@ parse_set_cookie (const char *set_cookie, bool silent)
         }
       else if (TOKEN_IS (name, "expires"))
         {
-          char value_copy[128];
-          size_t value_len = value.e - value.b;
+          char *value_copy;
           time_t expires;
 
-          if (!TOKEN_NON_EMPTY (value) || value_len >= sizeof (value_copy))
+          if (!TOKEN_NON_EMPTY (value))
             goto error;
-
-          memcpy (value_copy, value.b, value_len);
-          value_copy[value_len] = 0;
+          BOUNDED_TO_ALLOCA (value.b, value.e, value_copy);
 
           /* Check if expiration spec is valid.
              If not, assume default (cookie doesn't expire, but valid only for
@@ -423,21 +420,18 @@ parse_set_cookie (const char *set_cookie, bool silent)
       else if (TOKEN_IS (name, "max-age"))
         {
           double maxage = -1;
-          char value_copy[32];
-          size_t value_len = value.e - value.b;
+          char *value_copy;
 
-          if (!TOKEN_NON_EMPTY (value) || value_len >= sizeof (value_copy))
+          if (!TOKEN_NON_EMPTY (value))
             goto error;
-
-          memcpy (value_copy, value.b, value_len);
-          value_copy[value_len] = 0;
+          BOUNDED_TO_ALLOCA (value.b, value.e, value_copy);
 
           sscanf (value_copy, "%lf", &maxage);
           if (maxage == -1)
             /* something went wrong. */
             goto error;
           cookie->permanent = 1;
-          cookie->expiry_time = cookies_now + (time_t) maxage;
+          cookie->expiry_time = cookies_now + maxage;
 
           /* According to rfc2109, a cookie with max-age of 0 means that
              discarding of a matching cookie is requested.  */
@@ -527,15 +521,14 @@ numeric_address_p (const char *addr)
    upper case strings.
    */
 
-#ifdef HAVE_LIBPSL
-static psl_ctx_t *psl;
-#endif
-
 static bool
 check_domain_match (const char *cookie_domain, const char *host)
 {
+
 #ifdef HAVE_LIBPSL
   static int init_psl;
+  static const psl_ctx_t *psl;
+
   char *cookie_domain_lower = NULL;
   char *host_lower = NULL;
   int is_acceptable;
@@ -729,6 +722,17 @@ check_path_match (const char *cookie_path, const char *path)
   return path_matches (path, cookie_path) != 0;
 }
 
+/* Prepend '/' to string S.  S is copied to fresh stack-allocated
+   space and its value is modified to point to the new location.  */
+
+#define PREPEND_SLASH(s) do {                                   \
+  char *PS_newstr = (char *) alloca (1 + strlen (s) + 1);       \
+  *PS_newstr = '/';                                             \
+  strcpy (PS_newstr + 1, s);                                    \
+  s = PS_newstr;                                                \
+} while (0)
+
+
 /* Process the HTTP `Set-Cookie' header.  This results in storing the
    cookie or discarding a matching one, or ignoring it completely, all
    depending on the contents.  */
@@ -740,20 +744,11 @@ cookie_handle_set_cookie (struct cookie_jar *jar,
 {
   struct cookie *cookie;
   cookies_now = time (NULL);
-  char buf[1024], *tmp;
-  size_t pathlen = strlen(path);
 
   /* Wget's paths don't begin with '/' (blame rfc1808), but cookie
      usage assumes /-prefixed paths.  Until the rest of Wget is fixed,
      simply prepend slash to PATH.  */
-  if (pathlen < sizeof (buf) - 1)
-    tmp = buf;
-  else
-    tmp = xmalloc (pathlen + 2);
-
-  *tmp = '/';
-  memcpy (tmp + 1, path, pathlen + 1);
-  path = tmp;
+  PREPEND_SLASH (path);
 
   cookie = parse_set_cookie (set_cookie, false);
   if (!cookie)
@@ -815,15 +810,11 @@ cookie_handle_set_cookie (struct cookie_jar *jar,
     }
 
   store_cookie (jar, cookie);
-  if (tmp != buf)
-    xfree (tmp);
   return;
 
  out:
   if (cookie)
     delete_cookie (cookie);
-  if (tmp != buf)
-    xfree (tmp);
 }
 
 /* Support for sending out cookies in HTTP requests, based on
@@ -1055,46 +1046,27 @@ char *
 cookie_header (struct cookie_jar *jar, const char *host,
                int port, const char *path, bool secflag)
 {
-  struct cookie *chains[32];
+  struct cookie **chains;
   int chain_count;
 
   struct cookie *cookie;
   struct weighed_cookie *outgoing;
   size_t count, i, ocnt;
-  char *result = NULL;
+  char *result;
   int result_size, pos;
-  char pathbuf[1024];
+  PREPEND_SLASH (path);         /* see cookie_handle_set_cookie */
 
   /* First, find the cookie chains whose domains match HOST. */
 
   /* Allocate room for find_chains_of_host to write to.  The number of
      chains can at most equal the number of subdomains, hence
-     1+<number of dots>.  We ignore cookies with more than 32 labels. */
-  chain_count = 1 + count_char (host, '.');
-  if (chain_count > (int) countof (chains))
-    return NULL;
+     1+<number of dots>.  */
+  chains = alloca_array (struct cookie *, 1 + count_char (host, '.'));
   chain_count = find_chains_of_host (jar, host, chains);
 
   /* No cookies for this host. */
   if (chain_count <= 0)
     return NULL;
-
-  /* Wget's paths don't begin with '/' (blame rfc1808), but cookie
-     usage assumes /-prefixed paths.  Until the rest of Wget is fixed,
-     simply prepend slash to PATH.  */
-  {
-    char *tmp;
-    size_t pathlen = strlen(path);
-
-    if (pathlen < sizeof (pathbuf) - 1)
-      tmp = pathbuf;
-    else
-      tmp = xmalloc (pathlen + 2);
-
-    *tmp = '/';
-    memcpy (tmp + 1, path, pathlen + 1);
-    path = tmp;
-  }
 
   cookies_now = time (NULL);
 
@@ -1109,11 +1081,11 @@ cookie_header (struct cookie_jar *jar, const char *host,
       if (cookie_matches_url (cookie, host, port, path, secflag, NULL))
         ++count;
   if (!count)
-    goto out;                /* no cookies matched */
+    return NULL;                /* no cookies matched */
 
   /* Allocate the array. */
   if (count > SIZE_MAX / sizeof (struct weighed_cookie))
-    goto out;                /* unable to process so many cookies */
+    return NULL;                /* unable to process so many cookies */
   outgoing = xmalloc (count * sizeof (struct weighed_cookie));
 
   /* Fill the array with all the matching cookies from the chains that
@@ -1176,12 +1148,7 @@ cookie_header (struct cookie_jar *jar, const char *host,
   result[pos++] = '\0';
   xfree (outgoing);
   assert (pos == result_size);
-
-out:
-  if (path != pathbuf)
-    xfree (path);
-
-return result;
+  return result;
 }
 
 /* Support for loading and saving cookies.  The format used for
@@ -1345,7 +1312,7 @@ cookie_jar_load (struct cookie_jar *jar, const char *file)
         {
           if (expiry < cookies_now)
             goto abort_cookie;  /* ignore stale cookie. */
-          cookie->expiry_time = (time_t) expiry;
+          cookie->expiry_time = expiry;
           cookie->permanent = 1;
         }
 
@@ -1382,7 +1349,7 @@ cookie_jar_save (struct cookie_jar *jar, const char *file)
       return;
     }
 
-  fputs ("# HTTP Cookie File\n", fp);
+  fputs ("# HTTP cookie file.\n", fp);
   fprintf (fp, "# Generated by Wget on %s.\n", datetime_str (cookies_now));
   fputs ("# Edit at your own risk.\n\n", fp);
 
@@ -1444,11 +1411,6 @@ cookie_jar_delete (struct cookie_jar *jar)
     }
   hash_table_destroy (jar->chains);
   xfree (jar);
-
-#ifdef HAVE_LIBPSL
-  psl_free (psl);
-  psl = NULL;
-#endif
 }
 
 /* Test cases.  Currently this is only tests parse_set_cookies.  To
